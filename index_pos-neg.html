@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leaflet with GeoJSON from ArcGIS</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    #map { height: 400px; }
+    #form { margin-top: 20px; }
+
+    .label-marker .label {
+    font-family: 'Open Sans', sans-serif;
+    font-size: 12px; /* Initial font size */
+}
+
+/* Adjust font size based on zoom level */
+.label-marker .label {
+    transform-origin: center bottom;
+    transition: transform 0.1s linear;
+}
+
+/* Define font size at different zoom levels */
+.label-marker .label[data-zoom="16"] {
+    font-size: 6px;
+}
+
+.label-marker .label[data-zoom="17"] {
+    font-size: 12px;
+}
+
+.label-marker .label[data-zoom="18"] {
+    font-size: 24px;
+}
+
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Overpass:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div id="map"></div>
+<div id="form">
+  <form id="dataForm">
+    <label for="csvInput">CSV Data:</label>
+    <textarea id="csvInput" name="csvInput" rows="3" required></textarea>
+
+    <button type="button" onclick="refreshMap()">Submit</button>
+    <button type="button" onclick="copyToClipboard()">Copy GeoJSON to Clipboard</button>
+    </form>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  var map = L.map('map', { scrollWheelZoom: 0.25 }).setView([0, 0], 2);
+
+var geojsonLayer;
+var minValue;
+  var maxValue;
+
+  map.on('zoomend', function () {
+    updateLabelFont();
+});
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  function refreshMap() {
+    var csvInput = document.getElementById('csvInput').value;
+
+    // Parse CSV data
+    var rows = csvInput.split('\n');
+    var data = [];
+    for (var i = 1; i < rows.length; i++) {
+      var columns = rows[i].split(',');
+      var zipCode = columns[0].trim();
+      var propertyValue = parseFloat(columns[1].trim());
+      data.push({ zipCode: zipCode, propertyValue: propertyValue });
+    }
+
+    // Create a comma-separated list of zip codes
+    var zipCodeList = data.map(entry => entry.zipCode).join(',');
+
+    // ArcGIS layer URL with the list of zip codes
+    var arcgisLayerUrl = 'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Boundaries_2022/FeatureServer/3/query?where=ZIP_CODE+IN+(' + zipCodeList + ')&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&resultType=none&distance=0.0&units=esriSRUnit_Meter&relationParam=&returnGeodetic=false&outFields=ZIP_CODE&returnGeometry=true&returnCentroid=false&returnEnvelope=false&featureEncoding=esriDefault&multipatchOption=xyFootprint&maxAllowableOffset=&geometryPrecision=&outSR=&defaultSR=&datumTransformation=&applyVCSProjection=false&returnIdsOnly=false&returnUniqueIdsOnly=false&returnCountOnly=false&returnExtentOnly=false&returnQueryGeometry=false&returnDistinctValues=false&cacheHint=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&having=&resultOffset=&resultRecordCount=&returnZ=false&returnM=false&returnExceededLimitFeatures=true&quantizationParameters=&sqlFormat=none&f=pgeojson&token=';
+
+    // Make a GET request to ArcGIS layer URL to fetch GeoJSON data
+    fetch(arcgisLayerUrl)
+      .then(response => response.json())
+      .then(geojson => {
+        // Clear existing layers
+        map.eachLayer(function (layer) {
+          if (layer instanceof L.GeoJSON) {
+            map.removeLayer(layer);
+          }
+        });
+
+        // Determine minValue and maxValue
+    minValue = Math.min(...data.map(entry => entry.propertyValue));
+    maxValue = Math.max(...data.map(entry => entry.propertyValue));
+
+    // Add GeoJSON data to the map with styled polygons and labels
+        geojsonLayer = L.geoJSON(geojson, {
+          style: function (feature) {
+            var zipCode = feature.properties.ZIP_CODE;
+            var propertyValue = getProperty(data, zipCode);
+            var color = getColor(propertyValue);
+            feature.properties.fill = color; // Add fillColor to properties
+            return { fillColor: color, color: '#fff', weight: 1, fillOpacity: 0.7 };
+          },
+          onEachFeature: function (feature, layer) {
+            var zipCode = feature.properties.ZIP_CODE;
+            var propertyValue = getProperty(data, zipCode);
+            var label = zipCode;
+            var center = layer.getBounds().getCenter();
+            L.marker(center, {
+              icon: L.divIcon({
+                className: 'label',
+                html: '<div style="font-family: \'Overpass\', sans-serif;">' + label + '</div>',
+                iconSize: [30, 15]
+              })
+            }).addTo(map);
+          }
+        }).addTo(map);
+
+        // Fit the map to the GeoJSON data extent
+        map.fitBounds(geojsonLayer.getBounds());
+      })
+      .catch(error => console.error('Error fetching GeoJSON data:', error));
+  }
+
+  function getProperty(data, zipCode) {
+    // Find the property value for the given zip code
+    var entry = data.find(entry => entry.zipCode === zipCode);
+    return entry ? entry.propertyValue : 0;
+  }
+
+
+
+  function updateLabelFont() {
+    var labels = document.getElementsByClassName('label');
+    for (var i = 0; i < labels.length; i++) {
+        var fontSize = 12 * (map.getZoom()-14);
+        labels[i].style.setProperty('font-size', fontSize + 'px');
+        // boxParaRulesetProperty("font-size", fontSize);
+        // console.log(fontSize + 'px !important')
+    }
+  }
+
+
+  function copyToClipboard() {
+      if (geojsonLayer) {
+        var geojsonString = JSON.stringify(geojsonLayer.toGeoJSON());
+        navigator.clipboard.writeText(geojsonString)
+          .then(function() {
+            alert('GeoJSON copied to clipboard!');
+          })
+          .catch(function(err) {
+            console.error('Unable to copy GeoJSON to clipboard', err);
+          });
+      } else {
+        console.warn('No GeoJSON data available to copy.');
+      }
+    }
+
+
+    function getColor(value) {
+    // Define a gradient based on property values
+    var positiveColor = '#008080'; // Teal for positive values
+    var negativeColor = '#FFA500'; // Orange for negative values
+
+    // Convert property values to a range between 0 and 1
+    var normalizedValue = (value - minValue) / (maxValue - minValue);
+
+
+    // Interpolate color based on the gradient
+    var interpolatedColor;
+    if (value >= 0) {
+      interpolatedColor = interpolateColor(positiveColor, '#ffffff', normalizedValue);
+    } else {
+      interpolatedColor = interpolateColor(negativeColor, '#ffffff', -normalizedValue);
+    }
+    console.log(normalizedValue, interpolatedColor)
+    return interpolatedColor;
+  }
+
+  function interpolateColor(color1, color2, ratio) {
+    var hex = function(x) {
+      x = x.toString(16);
+      return (x.length === 1) ? '0' + x : x;
+    };
+
+    var r1 = parseInt(color1.substring(1, 3), 16);
+    var g1 = parseInt(color1.substring(3, 5), 16);
+    var b1 = parseInt(color1.substring(5, 7), 16);
+
+    var r2 = parseInt(color2.substring(1, 3), 16);
+    var g2 = parseInt(color2.substring(3, 5), 16);
+    var b2 = parseInt(color2.substring(5, 7), 16);
+
+    var r = Math.round(r1 * (1 - ratio) + r2 * ratio);
+    var g = Math.round(g1 * (1 - ratio) + g2 * ratio);
+    var b = Math.round(b1 * (1 - ratio) + b2 * ratio);
+
+    return '#' + hex(r) + hex(g) + hex(b);
+  }
+</script>
+
+</body>
+</html>
